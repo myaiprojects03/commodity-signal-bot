@@ -1,23 +1,17 @@
 """
 alerts/email_notifier.py
 
-Gmail SMTP email notifier.
+Resend HTTP API email notifier.
+Replaces Gmail SMTP (blocked on Railway free tier).
 
 Setup:
-  1. Enable 2-Step Verification on your Google account.
-  2. Go to: Google Account → Security → App Passwords
-  3. Generate an App Password for "Mail"
-  4. Set EMAIL_SENDER, EMAIL_PASSWORD, EMAIL_RECIPIENT in .env
-  5. Optionally set EMAIL_SIGNAL_RECIPIENT for a second email that
-     receives trade signals only (no 30-min summary reports).
-
-No paid service needed. Works on PythonAnywhere free tier.
+  1. Sign up at resend.com and get an API key.
+  2. Set RESEND_API_KEY in Railway environment variables.
+  3. EMAIL_SENDER, EMAIL_RECIPIENT, EMAIL_SIGNAL_RECIPIENT still read from env.
 """
 
 import os
-import smtplib
-from email.mime.multipart import MIMEMultipart
-from email.mime.text import MIMEText
+import resend
 from typing import Optional
 
 from utils.logger import get_logger
@@ -30,17 +24,19 @@ class EmailNotifier:
     def __init__(self, config: dict) -> None:
         self._cfg              = config["email"]
         self._sender           = os.getenv("EMAIL_SENDER", "")
-        self._password         = os.getenv("EMAIL_PASSWORD", "")
         self._recipient        = os.getenv("EMAIL_RECIPIENT", "")
         self._signal_recipient = os.getenv("EMAIL_SIGNAL_RECIPIENT", "")
         self._enabled          = self._cfg.get("enabled", True)
 
-        if self._enabled and not all([self._sender, self._password, self._recipient]):
+        api_key = os.getenv("RESEND_API_KEY", "")
+        if self._enabled and not all([api_key, self._recipient]):
             logger.warning(
                 "Email not fully configured. "
-                "Set EMAIL_SENDER, EMAIL_PASSWORD, EMAIL_RECIPIENT in .env"
+                "Set RESEND_API_KEY and EMAIL_RECIPIENT in Railway variables."
             )
             self._enabled = False
+        else:
+            resend.api_key = api_key
 
         if self._signal_recipient:
             logger.info(
@@ -57,13 +53,10 @@ class EmailNotifier:
         is_signal: bool = False,
     ) -> bool:
         """
-        Send an email. Returns True on success.
+        Send an email via Resend HTTP API. Returns True on success.
 
         is_signal=True  → sent to EMAIL_RECIPIENT + EMAIL_SIGNAL_RECIPIENT
         is_signal=False → sent to EMAIL_RECIPIENT only (reports, summaries)
-
-        Sends both plain text and HTML (multipart/alternative).
-        Falls back to plain text only if html_body is None.
         """
         if not self._enabled:
             logger.info("Email disabled — would have sent: %s", subject)
@@ -74,41 +67,23 @@ class EmailNotifier:
         if is_signal and self._signal_recipient:
             recipients.append(self._signal_recipient)
 
-        try:
-            msg = MIMEMultipart("alternative")
-            msg["Subject"] = subject
-            msg["From"]    = self._sender
-            msg["To"]      = ", ".join(recipients)
+        # Build HTML fallback if not provided
+        body_html = html_body if html_body else f"<pre style='font-family:monospace'>{plain_text}</pre>"
 
-            msg.attach(MIMEText(plain_text, "plain", "utf-8"))
-            if html_body:
-                msg.attach(MIMEText(html_body, "html", "utf-8"))
+        for to_addr in recipients:
+            try:
+                resend.Emails.send({
+                    "from": "Commodity Bot <onboarding@resend.dev>",
+                    "to": to_addr,
+                    "subject": subject,
+                    "html": body_html,
+                })
+                logger.info("Email sent: %s → %s", subject, to_addr)
+            except Exception as exc:
+                logger.error("Email send failed to %s: %s", to_addr, exc)
+                return False
 
-            smtp_server = self._cfg.get("smtp_server", "smtp.gmail.com")
-            smtp_port   = self._cfg.get("smtp_port", 587)
-
-            with smtplib.SMTP(smtp_server, smtp_port, timeout=30) as server:
-                server.ehlo()
-                server.starttls()
-                server.login(self._sender, self._password)
-                server.sendmail(self._sender, recipients, msg.as_string())
-
-            logger.info("Email sent: %s → %s", subject, ", ".join(recipients))
-            return True
-
-        except smtplib.SMTPAuthenticationError:
-            logger.error(
-                "Gmail auth failed. "
-                "Use an App Password (not your main password). "
-                "See: myaccount.google.com/apppasswords"
-            )
-            return False
-        except smtplib.SMTPException as exc:
-            logger.error("SMTP error: %s", exc)
-            return False
-        except Exception as exc:
-            logger.error("Email send failed: %s", exc)
-            return False
+        return True
 
     def test_connection(self) -> bool:
         """Send a test email to verify credentials."""

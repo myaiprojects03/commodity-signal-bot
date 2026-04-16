@@ -1,0 +1,204 @@
+system:
+  name: "CommoditySignalBot"
+  version: "1.0.0"
+  log_level: "INFO"
+  log_to_file: true
+  log_file_path: "logs/system.log"
+
+# ─────────────────────────────────────────
+# INSTRUMENTS
+# yfinance tickers:
+#   GC=F  → Gold Futures (COMEX)
+#   SI=F  → Silver Futures (COMEX)
+#   CL=F  → WTI Crude Oil Futures (NYMEX)
+# ─────────────────────────────────────────
+instruments:
+  - symbol: "GC=F"
+    name: "Gold"
+    pip_size: 0.1        # minimum price movement for SL/TP rounding
+    typical_spread: 0.5  # approximate spread in price units
+  - symbol: "SI=F"
+    name: "Silver"
+    pip_size: 0.005
+    typical_spread: 0.01
+
+# ─────────────────────────────────────────
+# TIMEFRAMES
+# Multi-TF hierarchy: Weekly → Daily → 4H → 1H → 15m
+# Signals validated on 15m, 1H, 4H
+# Trend context from Daily + Weekly
+# ─────────────────────────────────────────
+timeframes:
+  weekly:  "1wk"
+  daily:   "1d"
+  h4:      "1h"      # yfinance uses 1h; we aggregate to 4h in code
+  h1:      "1h"
+  m15:     "15m"
+
+# yfinance download periods per timeframe (how far back to pull)
+data_periods:
+  weekly:  "2y"
+  daily:   "1y"
+  h1:      "60d"
+  m15:     "7d"
+
+# ─────────────────────────────────────────
+# SIGNAL SCHEDULER
+# Runs every 30 minutes as required
+# ─────────────────────────────────────────
+scheduler:
+  run_interval_minutes: 30
+  daily_summary_hour_utc: 0   # 00:00 UTC
+
+# ─────────────────────────────────────────
+# ANALYSIS — INDICATORS
+# Best-practice settings for commodities
+# ─────────────────────────────────────────
+indicators:
+  # EMAs for trend direction
+  ema_fast: 20
+  ema_slow: 50
+  ema_long: 200
+
+  # RSI — gold stays overbought longer than stocks; use 75/25 threshold
+  rsi_period: 14
+  rsi_overbought: 75
+  rsi_oversold: 25
+  rsi_strong_overbought: 80
+  rsi_strong_oversold: 20
+
+  # MACD (Linda Raschke 3-10-16 fast config for commodities)
+  macd_fast: 12
+  macd_slow: 26
+  macd_signal: 9
+
+  # Bollinger Bands
+  bb_period: 20
+  bb_std: 2.0
+
+  # ATR — volatility & SL sizing
+  atr_period: 14
+
+  # Stochastic — secondary momentum confirmation
+  stoch_k: 14
+  stoch_d: 3
+  stoch_overbought: 80
+  stoch_oversold: 20
+
+  # Volume relative threshold
+  volume_high_multiplier: 1.5
+  volume_climax_multiplier: 3.0
+
+# ─────────────────────────────────────────
+# SUPPORT & RESISTANCE
+# ─────────────────────────────────────────
+support_resistance:
+  atr_zone_multiplier: 0.5
+  min_touches: 2
+  max_touches_before_discard: 5
+  swing_lookback: 5
+  round_number_tolerance_pct: 0.3
+  explosion_multiplier: 1.8
+  lookback_candles_daily: 60
+  lookback_candles_h1: 100
+  lookback_candles_m15: 150
+
+# ─────────────────────────────────────────
+# TREND RULES
+# ─────────────────────────────────────────
+trend:
+  swing_lookback: 5
+  min_swings_for_structure: 3
+  failed_swing_tolerance_pct: 0.5
+
+# ─────────────────────────────────────────
+# RISK / REWARD
+# ─────────────────────────────────────────
+risk_reward:
+  min_rr_ratio: 1.5
+  standard_rr_ratio: 2.0
+  high_rr_ratio: 3.0
+  sl_atr_buffer_multiplier: 0.5
+
+# ─────────────────────────────────────────
+# CONFIDENCE SCORING THRESHOLDS
+# ─────────────────────────────────────────
+signals:
+  min_confidence_score: 55
+  moderate_threshold: 55
+  strong_threshold: 70
+  elite_threshold: 85
+  cooldown_minutes: 90       # per instrument per direction
+
+# ─────────────────────────────────────────
+# TRADING SESSIONS (UTC)
+# Commodities trade on COMEX/NYMEX — NY session is most liquid
+# ─────────────────────────────────────────
+sessions:
+  pre_market:
+    start: "00:00"
+    end: "08:00"
+    score_adjustment: -5
+  london:
+    start: "08:00"
+    end: "12:00"
+    score_adjustment: 5
+  london_ny_overlap:
+    start: "12:00"
+    end: "14:00"
+    score_adjustment: 10    # Peak liquidity window for metals/oil
+  ny_open:
+    start: "13:00"
+    end: "14:30"
+    score_adjustment: 10
+  ny_session:
+    start: "14:00"
+    end: "20:00"
+    score_adjustment: 8
+  ny_close_afterhours:
+    start: "20:00"
+    end: "22:00"
+    score_adjustment: 0
+  dead_zone:
+    start: "22:00"
+    end: "00:00"
+    score_adjustment: -999  # Suppress all signals
+
+# ─────────────────────────────────────────
+# EMAIL
+# ─────────────────────────────────────────
+email:
+  enabled: true
+  smtp_server: "smtp.gmail.com"
+  smtp_port: 587
+  subject_prefix: "[Commodity Signal]"
+  # Credentials come from .env:
+  #   EMAIL_SENDER=your@gmail.com
+  #   EMAIL_PASSWORD=your_app_password
+  #   EMAIL_RECIPIENT=destination@gmail.com
+
+# ─────────────────────────────────────────
+# DATABASE
+# ─────────────────────────────────────────
+database:
+  path: "storage/signals.db"
+  retention_days: 90
+
+# ─────────────────────────────────────────
+# CANDLE PATTERNS
+# ─────────────────────────────────────────
+candle_patterns:
+  pin_bar_wick_ratio: 2.0
+  engulfing_tolerance_pct: 0.1
+  doji_body_ratio: 0.1
+  inside_bar_tolerance_pct: 0.05
+  tweezer_tolerance_pct: 0.3
+
+# ─────────────────────────────────────────
+# LIQUIDITY
+# ─────────────────────────────────────────
+liquidity:
+  equal_level_tolerance_pct: 0.3
+  min_equal_levels: 2
+  sweep_reversal_candles: 3
+  fvg_min_size_atr_ratio: 0.3
